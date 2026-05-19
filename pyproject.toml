@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "townshipamerica-mcp"
+version = "0.1.0"
+description = "Township America MCP server wrapper — PLSS tools for AI agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "township",
+    "america",
+    "plss",
+    "gps",
+    "coordinates",
+    "legal-land-description",
+    "ai",
+    "claude",
+]
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[project.urls]
+Homepage = "https://townshipamerica.com/api/mcp"
+Documentation = "https://townshipamerica.com/api/mcp"
+Repository = "https://github.com/townshipamerica/python-sdk"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/townshipamerica_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
