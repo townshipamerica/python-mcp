@@ -1,36 +1,30 @@
 """
 townshipamerica-mcp — Township America PLSS tools for AI agents.
 
-This package exposes the MCP server tools as ordinary Python callables
-so they can be called from scripts, notebooks, or custom MCP frameworks.
+MCP stdio server (Claude Desktop, Cursor, etc.)::
 
-Usage::
+    townshipamerica-mcp
+
+Python callables (scripts, notebooks)::
 
     from townshipamerica_mcp import TownshipMCPClient
 
-    client = TownshipMCPClient(api_key="ta_live_...")
+    client = TownshipMCPClient(api_key="ta_…")
     result = client.plss_to_coordinates("NW 25 24N 1E 6th Meridian")
-    print(result.lat, result.lng)
-
-    # Validate without making an API call
-    v = client.validate_description("NW 25 24N 1E 6th Meridian")
-    print(v.valid, v.normalized)
 """
 
 from .client import TownshipMCPClient
-from .models import (
-    SearchResult,
-    ValidationResult,
-    BatchRecord,
-    BatchResult,
-)
 from .exceptions import (
-    TownshipMCPError,
     AuthenticationError,
-    QuotaExceededError,
     NotFoundError,
+    QuotaExceededError,
+    TownshipMCPError,
     ValidationError,
 )
+from .models import BatchRecord, BatchResult, SearchResult, ValidationResult
+from .server import main
+
+__version__ = "0.2.0"
 
 __all__ = [
     "TownshipMCPClient",
@@ -43,6 +37,5 @@ __all__ = [
     "QuotaExceededError",
     "NotFoundError",
     "ValidationError",
+    "main",
 ]
-
-__version__ = "0.1.0"

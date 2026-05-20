@@ -1,19 +1,23 @@
 """
 Township America MCP client — exposes MCP server tools as Python callables.
 
-Each method mirrors a tool in @townshipamerica/mcp-server and hits the same
-AWS API Gateway endpoints using X-API-Key authentication.
+Backed by the :mod:`townshipamerica` SDK (same API as the stdio MCP server).
 """
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
-import sys
 from typing import Any
 
-import httpx
+from townshipamerica import TownshipAmerica
+from townshipamerica.exceptions import (
+    AuthenticationError as TAAuthenticationError,
+    NotFoundError as TANotFoundError,
+    RateLimitError,
+    TownshipAmericaError,
+    ValidationError as TAValidationError,
+)
+from townshipamerica.models import FeatureCollection, Point, Polygon
 
 from .exceptions import (
     AuthenticationError,
@@ -24,11 +28,9 @@ from .exceptions import (
 )
 from .models import BatchResult, LandReportStub, SearchResult, ValidationResult
 
-DEFAULT_BASE_URL = "https://developer.townshipamerica.com"
-DEFAULT_TIMEOUT = 10.0
-MAX_BATCH_SIZE = 1000
+MAX_BATCH_SIZE = 100
 
-# PLSS regex patterns (mirrored from @townshipamerica/mcp-server)
+# PLSS regex patterns (local validation without an API call)
 _TWP_PATTERN = re.compile(
     r"(?:\d{1,2}|1\d{2}|200)(\.5)?[NSE](-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NEW](-|\s+)(?:\b\w+\b\s*)+",
     re.IGNORECASE,
@@ -55,8 +57,14 @@ def _is_valid_plss(description: str) -> bool:
 def _normalize(description: str) -> str:
     d = description.strip().upper()
     aliases = {
-        "NORTHEAST": "NE", "NORTHWEST": "NW", "SOUTHEAST": "SE", "SOUTHWEST": "SW",
-        "NORTH EAST": "NE", "NORTH WEST": "NW", "SOUTH EAST": "SE", "SOUTH WEST": "SW",
+        "NORTHEAST": "NE",
+        "NORTHWEST": "NW",
+        "SOUTHEAST": "SE",
+        "SOUTHWEST": "SW",
+        "NORTH EAST": "NE",
+        "NORTH WEST": "NW",
+        "SOUTH EAST": "SE",
+        "SOUTH WEST": "SW",
     }
     for long, short in aliases.items():
         d = re.sub(rf"\b{long}\b", short, d, flags=re.IGNORECASE)
@@ -65,45 +73,60 @@ def _normalize(description: str) -> str:
     return d
 
 
-def _extract_search_result(fc: dict[str, Any]) -> SearchResult:
-    features = fc.get("features", [])
-    centroid = next((f for f in features if f.get("properties", {}).get("shape") == "centroid"), None)
-    grid = next((f for f in features if f.get("properties", {}).get("shape") == "grid"), None)
+def _map_error(exc: TownshipAmericaError) -> None:
+    if isinstance(exc, TAAuthenticationError):
+        raise AuthenticationError(exc.message) from exc
+    if isinstance(exc, TANotFoundError):
+        raise NotFoundError(exc.message) from exc
+    if isinstance(exc, TAValidationError):
+        raise ValidationError(exc.message) from exc
+    if isinstance(exc, RateLimitError):
+        raise QuotaExceededError(exc.message) from exc
+    raise TownshipMCPError(exc.message) from exc
 
-    props = (centroid or grid or {}).get("properties", {})
-    if not props:
+
+def _fc_to_search_result(fc: FeatureCollection) -> SearchResult:
+    centroid = fc.centroid
+    grid = fc.grid
+    feature = centroid or grid
+    if feature is None:
         raise TownshipMCPError("Unexpected API response: no features returned")
 
-    coords = centroid["geometry"]["coordinates"] if centroid else [0, 0]
-    lng, lat = float(coords[0]), float(coords[1])
+    props = feature.properties
+    lat = lng = 0.0
+    if centroid and isinstance(centroid.geometry, Point):
+        lat = centroid.geometry.latitude
+        lng = centroid.geometry.longitude
 
-    boundary = grid["geometry"] if grid and grid.get("geometry", {}).get("type") == "Polygon" else None
+    boundary = None
+    if grid and isinstance(grid.geometry, Polygon):
+        boundary = grid.geometry.model_dump()
 
     return SearchResult(
-        legal_location=props["legal_location"],
+        legal_location=props.legal_location or "",
         lat=lat,
         lng=lng,
-        state=props["state"],
-        county=props["county"],
+        state=props.state or "",
+        county=props.county or "",
         geometry=boundary,
     )
 
 
 class TownshipMCPClient:
     """
-    Python wrapper for the Township America MCP server tools.
+    Python wrapper for Township America MCP tools.
 
-    Authenticates against the AWS API Gateway using the Pro+ API key.
-    Quota enforcement is handled server-side (1,000 calls/month on Pro+ bundled).
+    Uses the :mod:`townshipamerica` SDK. For Claude Desktop, Cursor, and other MCP
+    clients, run the ``townshipamerica-mcp`` console script instead.
 
     Args:
-        api_key: Township America Pro+ API key (starts with ``ta_live_``).
-        base_url: Override the API base URL (default: ``developer.townshipamerica.com``).
-        timeout: Request timeout in seconds (default: 10).
+        api_key: Township America API key.
+        base_url: Override the API base URL.
+        timeout: Request timeout in seconds.
 
     Example::
 
-        client = TownshipMCPClient(api_key="ta_live_abc123")
+        client = TownshipMCPClient(api_key="ta_…")
         result = client.plss_to_coordinates("NW 25 24N 1E 6th Meridian")
         print(result.lat, result.lng)
     """
@@ -111,138 +134,59 @@ class TownshipMCPClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = DEFAULT_BASE_URL,
-        timeout: float = DEFAULT_TIMEOUT,
+        base_url: str | None = None,
+        timeout: float = 30.0,
     ) -> None:
         if not api_key or not api_key.strip():
             raise TownshipMCPError(
-                "api_key is required. "
-                "Generate a key at https://app.townshipamerica.com/settings/api-keys"
+                "api_key is required. Get one at https://townshipamerica.com/api"
             )
-        self._client = httpx.Client(
-            base_url=base_url.rstrip("/"),
-            headers={
-                "X-API-Key": api_key,
-                "User-Agent": "townshipamerica-mcp-python/0.1.0",
-            },
-            timeout=timeout,
-        )
-
-    def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
-        try:
-            resp = self._client.get(path, params=params)
-            self._raise_for_status(resp)
-            result: dict[str, Any] = resp.json()
-            return result
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            raise TownshipMCPError(f"Request failed: {exc}") from exc
-
-    def _post(self, path: str, body: Any) -> Any:
-        try:
-            resp = self._client.post(path, json=body, headers={"Content-Type": "application/json"})
-            self._raise_for_status(resp)
-            return resp.json()
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            raise TownshipMCPError(f"Request failed: {exc}") from exc
-
-    def _raise_for_status(self, resp: httpx.Response) -> None:
-        if resp.is_success:
-            return
-        try:
-            body = resp.json()
-            message = str(body.get("error") or body.get("message") or resp.reason_phrase)
-        except Exception:
-            message = resp.reason_phrase
-        if resp.status_code == 400:
-            raise ValidationError(message)
-        if resp.status_code == 401:
-            raise AuthenticationError(message)
-        if resp.status_code == 404:
-            raise NotFoundError(message)
-        if resp.status_code == 429:
-            raise QuotaExceededError(
-                "Pro+ bundled quota exceeded (1,000 calls/month). "
-                "Upgrade to Scale tier ($100/mo for 10,000 calls): "
-                "https://townshipamerica.com/pricing"
-            )
-        raise TownshipMCPError(f"API error {resp.status_code}: {message}")
+        kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
+        if base_url is not None:
+            kwargs["base_url"] = base_url
+        self._ta = TownshipAmerica(**kwargs)
 
     def plss_to_coordinates(self, description: str) -> SearchResult:
-        """
-        Convert a PLSS legal land description to GPS coordinates.
-
-        Args:
-            description: PLSS description, e.g. ``"NW 25 24N 1E 6th Meridian"``.
-
-        Returns:
-            :class:`SearchResult` with lat, lng, state, county, and optional boundary.
-
-        Raises:
-            :class:`NotFoundError`: If no result is found.
-            :class:`QuotaExceededError`: If the monthly quota is exhausted.
-        """
-        data = self._get("/search/legal-location", params={"location": description.strip()})
-        features = data.get("features", [])
-        if not features:
-            raise NotFoundError(f'No results found for "{description}"')
-        return _extract_search_result(data)
+        """Convert a PLSS legal land description to GPS coordinates."""
+        try:
+            fc = self._ta.search(description.strip())
+            if not fc.features:
+                raise NotFoundError(f'No results found for "{description}"')
+            return _fc_to_search_result(fc)
+        except TownshipAmericaError as exc:
+            _map_error(exc)
 
     def coordinates_to_plss(self, lat: float, lng: float) -> SearchResult:
-        """
-        Find the PLSS legal land description for given GPS coordinates.
-
-        Args:
-            lat: Latitude in decimal degrees.
-            lng: Longitude in decimal degrees.
-
-        Returns:
-            :class:`SearchResult` with the nearest PLSS description.
-
-        Raises:
-            :class:`NotFoundError`: If the location is outside PLSS coverage.
-            :class:`QuotaExceededError`: If the monthly quota is exhausted.
-        """
+        """Find the PLSS legal land description for given GPS coordinates."""
         if not (-90 <= lat <= 90):
             raise ValueError(f"lat must be between -90 and 90, got {lat}")
         if not (-180 <= lng <= 180):
             raise ValueError(f"lng must be between -180 and 180, got {lng}")
-        data = self._get("/search/coordinates", params={"location": f"{lng},{lat}"})
-        features = data.get("features", [])
-        if not features:
-            raise NotFoundError(f"No PLSS data found for coordinates [{lat}, {lng}]")
-        return _extract_search_result(data)
+        try:
+            fc = self._ta.reverse(lng, lat)
+            if not fc.features:
+                raise NotFoundError(f"No PLSS data found for coordinates [{lat}, {lng}]")
+            return _fc_to_search_result(fc)
+        except TownshipAmericaError as exc:
+            _map_error(exc)
 
     def plss_to_geojson(self, description: str) -> dict[str, Any]:
-        """
-        Get the GeoJSON boundary polygon for a PLSS legal land description.
-
-        Args:
-            description: PLSS description, e.g. ``"NW 25 24N 1E 6th Meridian"``.
-
-        Returns:
-            GeoJSON FeatureCollection dict with Polygon features.
-
-        Raises:
-            :class:`NotFoundError`: If no result is found.
-            :class:`QuotaExceededError`: If the monthly quota is exhausted.
-        """
-        data = self._get("/search/legal-location", params={"location": description.strip()})
-        features = data.get("features", [])
-        if not features:
-            raise NotFoundError(f'No GeoJSON found for "{description}"')
-        polygon_features = [f for f in features if f.get("geometry", {}).get("type") == "Polygon"]
-        return {"type": "FeatureCollection", "features": polygon_features}
+        """Return the GeoJSON boundary polygon for a PLSS legal land description."""
+        try:
+            fc = self._ta.search(description.strip())
+            polygon_features = [
+                f.model_dump()
+                for f in fc.features
+                if isinstance(f.geometry, Polygon)
+            ]
+            if not polygon_features:
+                raise NotFoundError(f'No GeoJSON found for "{description}"')
+            return {"type": "FeatureCollection", "features": polygon_features}
+        except TownshipAmericaError as exc:
+            _map_error(exc)
 
     def validate_description(self, description: str) -> ValidationResult:
-        """
-        Validate and normalize a PLSS description string (no API call).
-
-        Args:
-            description: PLSS description to validate.
-
-        Returns:
-            :class:`ValidationResult` with ``valid``, ``normalized``, and ``suggestion``.
-        """
+        """Validate and normalize a PLSS description string (no API call)."""
         if not description or not description.strip():
             raise ValueError("description must not be empty")
         normalized = _normalize(description)
@@ -259,64 +203,54 @@ class TownshipMCPClient:
         )
 
     def batch_convert(self, descriptions: list[str]) -> BatchResult:
-        """
-        Convert multiple PLSS descriptions to GPS coordinates in one request.
-
-        Args:
-            descriptions: List of PLSS descriptions (max 1,000).
-
-        Returns:
-            :class:`BatchResult` with total, converted, failed counts and per-record results.
-
-        Raises:
-            :class:`ValueError`: If more than 1,000 descriptions are provided.
-            :class:`QuotaExceededError`: If the monthly quota is exhausted.
-        """
+        """Convert multiple PLSS descriptions to GPS coordinates in one request."""
         if not descriptions:
             raise ValueError("descriptions must not be empty")
         if len(descriptions) > MAX_BATCH_SIZE:
             raise ValueError(
-                f"Pro+ bundled tier supports up to {MAX_BATCH_SIZE:,} descriptions per batch. "
-                f"Received {len(descriptions)}."
+                f"batch_convert accepts at most {MAX_BATCH_SIZE} descriptions; "
+                f"received {len(descriptions)}."
             )
-        data: list[dict[str, Any] | None] = self._post("/batch/legal-location", descriptions)
+        try:
+            results = self._ta.batch_search(descriptions)
+        except TownshipAmericaError as exc:
+            _map_error(exc)
+
         records = []
-        for i, fc in enumerate(data):
+        for i, fc in enumerate(results):
             inp = descriptions[i]
-            if fc is None or not fc.get("features"):
+            if fc is None or not fc.features:
                 records.append({"input": inp, "result": None, "error": "Not found"})
             else:
                 try:
-                    sr = _extract_search_result(fc)
-                    records.append({
-                        "input": inp,
-                        "result": {
-                            "legal_location": sr.legal_location,
-                            "lat": sr.lat, "lng": sr.lng,
-                            "state": sr.state, "county": sr.county,
-                            "geometry": sr.geometry,
-                        },
-                    })
+                    sr = _fc_to_search_result(fc)
+                    records.append(
+                        {
+                            "input": inp,
+                            "result": {
+                                "legal_location": sr.legal_location,
+                                "lat": sr.lat,
+                                "lng": sr.lng,
+                                "state": sr.state,
+                                "county": sr.county,
+                                "geometry": sr.geometry,
+                            },
+                        }
+                    )
                 except Exception as exc:
                     records.append({"input": inp, "result": None, "error": str(exc)})
         converted = sum(1 for r in records if r["result"] is not None)
-        return BatchResult.from_dict({
-            "total": len(records),
-            "converted": converted,
-            "failed": len(records) - converted,
-            "records": records,
-        })
+        return BatchResult.from_dict(
+            {
+                "total": len(records),
+                "converted": converted,
+                "failed": len(records) - converted,
+                "records": records,
+            }
+        )
 
     def land_report(self, description: str) -> LandReportStub:
-        """
-        Federal Land Report — coming Q3 2025.
-
-        Args:
-            description: PLSS legal land description.
-
-        Returns:
-            :class:`LandReportStub` with status ``coming_soon`` and preview fields.
-        """
+        """Federal Land Report — coming Q3 2025."""
         if not description or not description.strip():
             raise ValueError("description must not be empty")
         return LandReportStub(
@@ -325,43 +259,26 @@ class TownshipMCPClient:
             message=(
                 "Federal Land Report via MCP is coming Q3 2025. "
                 "Currently available via the Township America web app at "
-                "https://app.townshipamerica.com for Pro+ subscribers."
+                "https://townshipamerica.com for Pro+ subscribers."
             ),
             preview_fields=[
-                "federal_land_status", "blm_surface_ownership", "blm_mineral_ownership",
-                "national_forest", "national_park", "tribal_lands", "water_rights", "patents",
+                "federal_land_status",
+                "blm_surface_ownership",
+                "blm_mineral_ownership",
+                "national_forest",
+                "national_park",
+                "tribal_lands",
+                "water_rights",
+                "patents",
             ],
         )
 
     def close(self) -> None:
         """Close the underlying HTTP client."""
-        self._client.close()
+        self._ta.close()
 
-    def __enter__(self) -> "TownshipMCPClient":
+    def __enter__(self) -> TownshipMCPClient:
         return self
 
     def __exit__(self, *args: object) -> None:
         self.close()
-
-    @staticmethod
-    def launch_mcp_server(api_key: str) -> subprocess.Popen[bytes]:
-        """
-        Launch the Node.js MCP server as a subprocess (stdio transport).
-
-        This is a convenience helper for embedding the MCP server in custom
-        MCP framework integrations. Requires Node.js 22+ and npx.
-
-        Args:
-            api_key: Township America Pro+ API key.
-
-        Returns:
-            A ``subprocess.Popen`` instance. The caller is responsible for
-            managing the lifecycle (stdin/stdout for MCP stdio transport).
-        """
-        return subprocess.Popen(
-            ["npx", "-y", "@townshipamerica/mcp-server"],
-            env={**dict(__import__("os").environ), "TA_API_KEY": api_key},
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=sys.stderr,
-        )
