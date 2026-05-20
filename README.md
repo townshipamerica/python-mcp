@@ -7,7 +7,7 @@ Model Context Protocol (MCP) server that exposes Township America's PLSS convers
 
 Also includes a Python client (`TownshipMCPClient`) for scripts and notebooks, backed by the [townshipamerica](https://pypi.org/project/townshipamerica/) SDK.
 
-[API Documentation](https://townshipamerica.com/api) · [GitHub](https://github.com/townshipamerica/python-mcp) · [PyPI](https://pypi.org/project/townshipamerica-mcp/) · [TypeScript MCP](https://github.com/townshipamerica/typescript-mcp)
+[API Documentation](https://townshipamerica.com/api) · [GitHub](https://github.com/townshipamerica/python-mcp) · [PyPI](https://pypi.org/project/townshipamerica-mcp/) · [npm (Node)](https://www.npmjs.com/package/townshipamerica-mcp)
 
 Requires a [Pro+ subscription](https://townshipamerica.com/pricing) ($99/mo) for bundled API access.
 
