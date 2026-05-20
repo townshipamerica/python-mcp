@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "townshipamerica-mcp"
-version = "1.0.0"
+version = "1.0.1"
 description = "Model Context Protocol server for Township America — PLSS tools for AI agents"
 readme = "README.md"
 license = { text = "MIT" }

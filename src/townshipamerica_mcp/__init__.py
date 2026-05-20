@@ -24,7 +24,7 @@ from .exceptions import (
 from .models import BatchRecord, BatchResult, SearchResult, ValidationResult
 from .server import main
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 __all__ = [
     "TownshipMCPClient",

@@ -15,13 +15,12 @@ from townshipamerica.exceptions import (
 from townshipamerica.models import Feature, FeatureCollection, FeatureProperties, Point
 
 from townshipamerica_mcp.client import (
-    MAX_BATCH_SIZE,
     TownshipMCPClient,
     _fc_to_search_result,
-    _is_valid_plss,
     _map_error,
-    _normalize,
 )
+from townshipamerica_mcp.constants import MAX_BATCH_SIZE
+from townshipamerica_mcp.plss_validation import is_valid_plss, normalize_plss
 from townshipamerica_mcp.exceptions import (
     AuthenticationError,
     NotFoundError,
@@ -33,21 +32,21 @@ from townshipamerica_mcp.exceptions import (
 
 class TestNormalize:
     def test_expands_quarter_aliases(self):
-        assert "NE" in _normalize("NORTHEAST 25 24N 1E 6TH MERIDIAN")
+        assert "NE" in normalize_plss("NORTHEAST 25 24N 1E 6TH MERIDIAN")
 
     def test_replaces_fraction_symbol(self):
-        assert "1/4" in _normalize("SE¼ NW¼ 14 T2N R4E")
+        assert "1/4" in normalize_plss("SE¼ NW¼ 14 T2N R4E")
 
     def test_collapses_whitespace(self):
-        assert _normalize("  NW   25   24N  1E  ") == "NW 25 24N 1E"
+        assert normalize_plss("  NW   25   24N  1E  ") == "NW 25 24N 1E"
 
 
 class TestPlssValidation:
     def test_valid_section_description(self):
-        assert _is_valid_plss("NW 25 24N 1E 6TH MERIDIAN")
+        assert is_valid_plss("NW 25 24N 1E 6TH MERIDIAN")
 
     def test_invalid_description(self):
-        assert not _is_valid_plss("not a plss string")
+        assert not is_valid_plss("not a plss string")
 
 
 class TestMapError:

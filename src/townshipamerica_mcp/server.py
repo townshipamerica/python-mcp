@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import asdict
 from typing import Any
 
 from mcp.server import Server
@@ -14,22 +15,48 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from townshipamerica import AsyncTownshipAmerica
-from townshipamerica.exceptions import TownshipAmericaError
+from townshipamerica.exceptions import RateLimitError, TownshipAmericaError
+from townshipamerica.models import Polygon
+
+from .client import _fc_to_search_result
+from .constants import (
+    API_KEY_ENV,
+    API_KEY_HELP_URL,
+    BASE_URL_ENV,
+    DEFAULT_AUTOCOMPLETE_LIMIT,
+    LEGACY_API_KEY_ENV,
+    MAX_AUTOCOMPLETE_LIMIT,
+    MAX_BATCH_SIZE,
+    QUOTA_EXCEEDED_MESSAGE,
+)
+from .models import LandReportStub
+from .plss_validation import validate_plss_description
 
 logger = logging.getLogger("townshipamerica_mcp")
 
 server: Server = Server("townshipamerica")
 
-API_KEY_ENV = "TOWNSHIP_AMERICA_API_KEY"
-BASE_URL_ENV = "TOWNSHIP_AMERICA_BASE_URL"
+_LAND_REPORT_PREVIEW_FIELDS = [
+    "federal_land_status",
+    "blm_surface_ownership",
+    "blm_mineral_ownership",
+    "national_forest",
+    "national_park",
+    "tribal_lands",
+    "water_rights",
+    "patents",
+]
 
 
 def _get_api_key() -> str:
-    key = os.environ.get(API_KEY_ENV, "").strip()
+    key = (
+        os.environ.get(API_KEY_ENV, "").strip()
+        or os.environ.get(LEGACY_API_KEY_ENV, "").strip()
+    )
     if not key:
         raise RuntimeError(
-            f"Set the {API_KEY_ENV} environment variable to your Township America API key. "
-            "Get one at https://townshipamerica.com/api."
+            f"Set {API_KEY_ENV} (preferred) or {LEGACY_API_KEY_ENV} to your Township America API key. "
+            f"Generate a key at {API_KEY_HELP_URL}."
         )
     return key
 
@@ -42,6 +69,14 @@ def _make_client() -> AsyncTownshipAmerica:
     return AsyncTownshipAmerica(**kwargs)
 
 
+def _longitude(arguments: dict[str, Any]) -> float:
+    if "lng" in arguments:
+        return float(arguments["lng"])
+    if "lon" in arguments:
+        return float(arguments["lon"])
+    raise KeyError("lng")
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """Return the tool catalog visible to AI agents."""
@@ -49,11 +84,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="plss_to_coordinates",
             description=(
-                "Convert a Public Land Survey System (PLSS) legal description to GPS coordinates "
-                "(latitude/longitude). Accepts descriptions for all 30 PLSS states and 37 "
-                "principal meridians. Examples: 'NW 25 24N 1E 6th Meridian', "
-                "'NE 12 4N 5E Indian Meridian', 'SE¼ NW¼ Section 14 T2N R4E Mount Diablo Meridian'. "
-                "Returns the section centroid and bounding polygon."
+                "Convert a PLSS (Public Land Survey System) legal land description to GPS coordinates. "
+                "Supports US legal descriptions such as 'NW 25 24N 1E 6th Meridian', 'T4N R5E Sec 12 NE¼', etc. "
+                "Returns the section centroid and bounding polygon. Covers 30 PLSS states and 37 principal meridians."
             ),
             inputSchema={
                 "type": "object",
@@ -69,25 +102,23 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="coordinates_to_plss",
             description=(
-                "Reverse-lookup GPS coordinates (latitude/longitude) to a PLSS legal description. "
-                "Returns the section, township, range, and principal meridian for the parcel "
-                "containing the point."
+                "Find the PLSS legal land description for given GPS coordinates. "
+                "Returns the section, township, range, and principal meridian for any US location covered by PLSS."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "lat": {"type": "number", "description": "Latitude in decimal degrees."},
-                    "lon": {"type": "number", "description": "Longitude in decimal degrees."},
+                    "lng": {"type": "number", "description": "Longitude in decimal degrees."},
                 },
-                "required": ["lat", "lon"],
+                "required": ["lat", "lng"],
             },
         ),
         Tool(
             name="plss_to_geojson",
             description=(
-                "Return the full section, quarter-section, or aliquot-part boundary polygon for a "
-                "PLSS legal description as a GeoJSON FeatureCollection. Useful when an AI agent "
-                "needs to plot the parcel on a map or perform spatial analysis."
+                "Return the GeoJSON boundary polygon for a PLSS legal land description. "
+                "Returns a FeatureCollection with the section or quarter-section footprint."
             ),
             inputSchema={
                 "type": "object",
@@ -103,9 +134,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="validate_description",
             description=(
-                "Check whether a PLSS legal description is valid and parseable. Returns "
-                "{valid: true/false, normalized: '...', state: '...', meridian: '...', reason: '...'}. "
-                "Useful for sanity-checking user input before downstream processing."
+                "Validate and normalize a PLSS legal land description string. "
+                "Returns whether the input matches known PLSS patterns, a normalized form, and suggestions if invalid. "
+                "No API call is made — this runs locally."
             ),
             inputSchema={
                 "type": "object",
@@ -121,8 +152,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="batch_convert",
             description=(
-                "Convert multiple PLSS descriptions to coordinates in one call. Accepts up to 100 "
-                "descriptions per request. Returns an array of results matching the input order."
+                "Convert multiple PLSS legal land descriptions to GPS coordinates in one request. "
+                f"Accepts up to {MAX_BATCH_SIZE} descriptions per request. "
+                "Returns total, converted, failed counts and per-input records."
             ),
             inputSchema={
                 "type": "object",
@@ -130,8 +162,8 @@ async def list_tools() -> list[Tool]:
                     "descriptions": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Array of PLSS legal land descriptions.",
-                        "maxItems": 100,
+                        "description": f"Array of PLSS legal land descriptions (max {MAX_BATCH_SIZE}).",
+                        "maxItems": MAX_BATCH_SIZE,
                     }
                 },
                 "required": ["descriptions"],
@@ -140,23 +172,41 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="autocomplete",
             description=(
-                "Get autocomplete suggestions for a partial PLSS description (e.g., user typing "
-                "'T2N R4'). Returns up to 10 candidate descriptions ordered by likelihood."
+                "Get autocomplete suggestions for a partial PLSS description (e.g. user typing 'T2N R4'). "
+                f"Returns up to {MAX_AUTOCOMPLETE_LIMIT} candidate descriptions."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Partial PLSS description.",
+                        "description": "Partial PLSS description (minimum 2 characters).",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum suggestions (default 10, max 25).",
-                        "default": 10,
+                        "description": f"Maximum suggestions (default {DEFAULT_AUTOCOMPLETE_LIMIT}, max {MAX_AUTOCOMPLETE_LIMIT}).",
+                        "default": DEFAULT_AUTOCOMPLETE_LIMIT,
                     },
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="land_report",
+            description=(
+                "Retrieve a Federal Land Report for a PLSS legal land description. "
+                "Provides federal land status, BLM ownership, mineral rights, and water rights data. "
+                "NOTE: MCP delivery of Federal Land Reports is coming Q3 2025."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "PLSS legal land description.",
+                    }
+                },
+                "required": ["description"],
             },
         ),
     ]
@@ -170,9 +220,46 @@ def _err(message: str) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps({"error": message}, indent=2))]
 
 
+def _land_report_stub(description: str) -> dict[str, Any]:
+    stub = LandReportStub(
+        status="coming_soon",
+        description=description.strip(),
+        message=(
+            "Federal Land Report via MCP is coming Q3 2025. "
+            "Currently available via the Township America web app at "
+            "https://app.townshipamerica.com for Pro+ subscribers. "
+            "A dedicated API-key-authenticated endpoint will be available for AI agents this quarter."
+        ),
+        preview_fields=_LAND_REPORT_PREVIEW_FIELDS,
+    )
+    return asdict(stub)
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
+        if name == "validate_description":
+            description = arguments["description"]
+            try:
+                result = validate_plss_description(description)
+                payload: dict[str, Any] = {
+                    "valid": result.valid,
+                    "input": description,
+                }
+                if result.normalized is not None:
+                    payload["normalized"] = result.normalized
+                if result.suggestion is not None:
+                    payload["suggestion"] = result.suggestion
+                return _ok(payload)
+            except ValueError as exc:
+                return _err(str(exc))
+
+        if name == "land_report":
+            description = arguments["description"]
+            if not isinstance(description, str) or not description.strip():
+                return _err("'description' must be a non-empty string.")
+            return _ok(_land_report_stub(description))
+
         async with _make_client() as client:
             if name == "plss_to_coordinates":
                 description = arguments["description"]
@@ -182,50 +269,98 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
             if name == "coordinates_to_plss":
                 lat = float(arguments["lat"])
-                lon = float(arguments["lon"])
-                result = await client.reverse(lon, lat)
-                return _ok(result.model_dump())
+                lng = _longitude(arguments)
+                if not (-90 <= lat <= 90):
+                    return _err(f"lat must be between -90 and 90, got {lat}")
+                if not (-180 <= lng <= 180):
+                    return _err(f"lng must be between -180 and 180, got {lng}")
+                result = await client.reverse(lng, lat)
+                if not result.features:
+                    return _err(
+                        f"No PLSS data found for coordinates [{lat}, {lng}]. "
+                        "PLSS covers 30 US states — this location may be outside the surveyed area."
+                    )
+                sr = _fc_to_search_result(result)
+                return _ok(
+                    {
+                        "legal_location": sr.legal_location,
+                        "lat": sr.lat,
+                        "lng": sr.lng,
+                        "state": sr.state,
+                        "county": sr.county,
+                        "geometry": sr.geometry,
+                    }
+                )
 
             if name == "plss_to_geojson":
                 description = arguments["description"]
                 result = await client.search(description)
-                return _ok(result.model_dump())
-
-            if name == "validate_description":
-                description = arguments["description"]
-                try:
-                    result = await client.search(description)
-                    payload = result.model_dump()
-                    feature = (payload.get("features") or [{}])[0]
-                    props = feature.get("properties", {}) if isinstance(feature, dict) else {}
-                    return _ok(
-                        {
-                            "valid": True,
-                            "input": description,
-                            "normalized": props.get("legal_location"),
-                            "state": props.get("state"),
-                            "meridian": props.get("meridian"),
-                        }
-                    )
-                except TownshipAmericaError as exc:
-                    return _ok({"valid": False, "input": description, "reason": str(exc)})
+                polygon_features = [
+                    f.model_dump()
+                    for f in result.features
+                    if isinstance(f.geometry, Polygon)
+                ]
+                if not polygon_features:
+                    return _err(f'No GeoJSON found for "{description}"')
+                return _ok({"type": "FeatureCollection", "features": polygon_features})
 
             if name == "batch_convert":
                 descriptions = arguments.get("descriptions", [])
                 if not isinstance(descriptions, list) or not descriptions:
                     return _err("descriptions must be a non-empty array of strings")
+                if len(descriptions) > MAX_BATCH_SIZE:
+                    return _err(
+                        f"batch_convert accepts at most {MAX_BATCH_SIZE} descriptions; "
+                        f"received {len(descriptions)}."
+                    )
                 results = await client.batch_search(descriptions)
-                payload = [r.model_dump() for r in results]
-                return _ok(payload)
+                records = []
+                for i, fc in enumerate(results):
+                    inp = descriptions[i]
+                    if fc is None or not fc.features:
+                        records.append({"input": inp, "result": None, "error": "Not found"})
+                    else:
+                        try:
+                            sr = _fc_to_search_result(fc)
+                            records.append(
+                                {
+                                    "input": inp,
+                                    "result": {
+                                        "legal_location": sr.legal_location,
+                                        "lat": sr.lat,
+                                        "lng": sr.lng,
+                                        "state": sr.state,
+                                        "county": sr.county,
+                                        "geometry": sr.geometry,
+                                    },
+                                }
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            records.append({"input": inp, "result": None, "error": str(exc)})
+                converted = sum(1 for r in records if r["result"] is not None)
+                return _ok(
+                    {
+                        "total": len(records),
+                        "converted": converted,
+                        "failed": len(records) - converted,
+                        "records": records,
+                    }
+                )
 
             if name == "autocomplete":
                 query = arguments["query"]
-                limit = int(arguments.get("limit", 10))
+                if not isinstance(query, str) or len(query.strip()) < 2:
+                    return _err("'query' must be at least 2 characters.")
+                limit = int(arguments.get("limit", DEFAULT_AUTOCOMPLETE_LIMIT))
+                limit = max(1, min(limit, MAX_AUTOCOMPLETE_LIMIT))
                 result = await client.autocomplete(query, limit=limit)
                 return _ok(result.model_dump())
 
             return _err(f"Unknown tool: {name}")
 
+    except RateLimitError:
+        logger.exception("Township America quota exceeded")
+        return _err(QUOTA_EXCEEDED_MESSAGE)
     except TownshipAmericaError as exc:
         logger.exception("Township America API error")
         return _err(f"API error: {exc}")

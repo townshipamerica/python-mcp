@@ -22,8 +22,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install hatch
+      - name: Install package and build tools
+        run: pip install -e ".[dev]" hatch
+
+      - name: Run tests
+        run: pytest -v
 
       - name: Build
         run: hatch build

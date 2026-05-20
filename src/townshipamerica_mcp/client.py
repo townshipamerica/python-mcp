@@ -6,7 +6,6 @@ Backed by the :mod:`townshipamerica` SDK (same API as the stdio MCP server).
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from townshipamerica import TownshipAmerica
@@ -26,51 +25,9 @@ from .exceptions import (
     TownshipMCPError,
     ValidationError,
 )
+from .constants import MAX_BATCH_SIZE
 from .models import BatchResult, LandReportStub, SearchResult, ValidationResult
-
-MAX_BATCH_SIZE = 100
-
-# PLSS regex patterns (local validation without an API call)
-_TWP_PATTERN = re.compile(
-    r"(?:\d{1,2}|1\d{2}|200)(\.5)?[NSE](-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NEW](-|\s+)(?:\b\w+\b\s*)+",
-    re.IGNORECASE,
-)
-_FIRST_DIVISION_PATTERN = re.compile(
-    r"(\d{1,4}[a-z]?|[a-z]{1,4}(\d{1,2})?)(-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NSE](-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NEW](-|\s+)(?:\b\w+\b\s*)+",
-    re.IGNORECASE,
-)
-_SECOND_DIVISION_PATTERN = re.compile(
-    r"(l\s*(\d{1,3})?|(nw|ne|sw|se){1,4}|[news]{1}(\d{1})?(nw|ne|sw|se){2,4}|\d{1,3}|(\w{1}))(-|\s+)(0?\d{1,6}[a-z]?|(nw|ne|sw|se){2}|[a-z]{1,2}(\d{1,3})?)(-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NSE](-|\s+)(?:\d{1,2}|1\d{2}|200)(\.5)?[NEW](-|\s+)(?:\b\w+\b\s*)+",
-    re.IGNORECASE,
-)
-
-
-def _is_valid_plss(description: str) -> bool:
-    d = description.strip()
-    return bool(
-        _SECOND_DIVISION_PATTERN.search(d)
-        or _FIRST_DIVISION_PATTERN.search(d)
-        or _TWP_PATTERN.search(d)
-    )
-
-
-def _normalize(description: str) -> str:
-    d = description.strip().upper()
-    aliases = {
-        "NORTHEAST": "NE",
-        "NORTHWEST": "NW",
-        "SOUTHEAST": "SE",
-        "SOUTHWEST": "SW",
-        "NORTH EAST": "NE",
-        "NORTH WEST": "NW",
-        "SOUTH EAST": "SE",
-        "SOUTH WEST": "SW",
-    }
-    for long, short in aliases.items():
-        d = re.sub(rf"\b{long}\b", short, d, flags=re.IGNORECASE)
-    d = d.replace("¼", " 1/4")
-    d = re.sub(r"\s+", " ", d).strip()
-    return d
+from .plss_validation import validate_plss_description
 
 
 def _map_error(exc: TownshipAmericaError) -> None:
@@ -187,20 +144,7 @@ class TownshipMCPClient:
 
     def validate_description(self, description: str) -> ValidationResult:
         """Validate and normalize a PLSS description string (no API call)."""
-        if not description or not description.strip():
-            raise ValueError("description must not be empty")
-        normalized = _normalize(description)
-        valid = _is_valid_plss(normalized) or _is_valid_plss(description)
-        if valid:
-            return ValidationResult(valid=True, normalized=normalized)
-        return ValidationResult(
-            valid=False,
-            suggestion=(
-                "PLSS descriptions follow the pattern: [Quarter] [Section] [Township][N/S] "
-                "[Range][E/W] [Principal Meridian]. "
-                "Example: 'NW 25 24N 1E 6th Meridian' or 'T4N R5E Sec 12 NE'."
-            ),
-        )
+        return validate_plss_description(description)
 
     def batch_convert(self, descriptions: list[str]) -> BatchResult:
         """Convert multiple PLSS descriptions to GPS coordinates in one request."""
@@ -259,7 +203,8 @@ class TownshipMCPClient:
             message=(
                 "Federal Land Report via MCP is coming Q3 2025. "
                 "Currently available via the Township America web app at "
-                "https://townshipamerica.com for Pro+ subscribers."
+                "https://app.townshipamerica.com for Pro+ subscribers. "
+                "A dedicated API-key-authenticated endpoint will be available for AI agents this quarter."
             ),
             preview_fields=[
                 "federal_land_status",
