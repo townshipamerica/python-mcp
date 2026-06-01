@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .models import ValidationResult
+from .tx_validation import is_valid_txss, normalize_txss
 
 # PLSS regex patterns (from web-app land-description rules; shared with typescript-mcp)
 _TWP_PATTERN = re.compile(
@@ -32,10 +33,10 @@ _QUARTER_ALIASES = {
 }
 
 _INVALID_SUGGESTION = (
-    "PLSS descriptions follow the pattern: [Quarter] [Section] [Township][N/S] "
-    "[Range][E/W] [Principal Meridian]. "
-    "Example: 'NW 25 24N 1E 6th Meridian' or 'T4N R5E Sec 12 NE'. "
-    "Ensure township/range direction letters (N/S, E/W) are present and a meridian name is included."
+    "Legal descriptions follow PLSS or Texas TXSS patterns. "
+    "PLSS example: 'NW 25 24N 1E 6th Meridian' or 'T4N R5E Sec 12 NE'. "
+    "Texas example: 'A-175 Reeves County' or 'Block 25 Section 14 Pecos County'. "
+    "Ensure PLSS inputs include township/range direction letters and a meridian name."
 )
 
 
@@ -57,11 +58,13 @@ def normalize_plss(description: str) -> str:
 
 
 def validate_plss_description(description: str) -> ValidationResult:
-    """Validate and normalize a PLSS string locally (no API call)."""
+    """Validate and normalize a PLSS or Texas TXSS string locally (no API call)."""
     if not description or not description.strip():
         raise ValueError("description must not be empty")
-    normalized = normalize_plss(description)
-    valid = is_valid_plss(normalized) or is_valid_plss(description)
-    if valid:
-        return ValidationResult(valid=True, normalized=normalized)
+    plss_normalized = normalize_plss(description)
+    if is_valid_plss(plss_normalized) or is_valid_plss(description):
+        return ValidationResult(valid=True, normalized=plss_normalized, survey_system="PLSS")
+    tx_normalized = normalize_txss(description)
+    if is_valid_txss(tx_normalized) or is_valid_txss(description):
+        return ValidationResult(valid=True, normalized=tx_normalized, survey_system="TXSS")
     return ValidationResult(valid=False, suggestion=_INVALID_SUGGESTION)

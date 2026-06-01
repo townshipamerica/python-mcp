@@ -36,6 +36,7 @@ class ValidationResult:
     valid: bool
     normalized: str | None = None
     suggestion: str | None = None
+    survey_system: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ValidationResult":
@@ -43,6 +44,7 @@ class ValidationResult:
             valid=bool(data["valid"]),
             normalized=data.get("normalized"),
             suggestion=data.get("suggestion"),
+            survey_system=data.get("survey_system"),
         )
 
 

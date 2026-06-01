@@ -1,4 +1,4 @@
-"""MCP server exposing Township America PLSS tools to AI agents."""
+"""MCP server exposing Township America PLSS and Texas TXSS tools to AI agents."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from mcp.types import TextContent, Tool
 
 from townshipamerica import AsyncTownshipAmerica
 from townshipamerica.exceptions import RateLimitError, TownshipAmericaError
-from townshipamerica.models import Polygon
+from townshipamerica.models import Polygon, MultiPolygon
 
 from .client import _fc_to_search_result
 from .constants import (
@@ -84,16 +84,17 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="plss_to_coordinates",
             description=(
-                "Convert a PLSS (Public Land Survey System) legal land description to GPS coordinates. "
-                "Supports US legal descriptions such as 'NW 25 24N 1E 6th Meridian', 'T4N R5E Sec 12 NE¼', etc. "
-                "Returns the section centroid and bounding polygon. Covers 30 PLSS states and 37 principal meridians."
+                "Convert a PLSS (Public Land Survey System) or Texas TXSS legal land description to GPS coordinates. "
+                "Supports US legal descriptions such as 'NW 25 24N 1E 6th Meridian', 'T4N R5E Sec 12 NE¼', "
+                "'A-175 Reeves County', etc. Returns the tract centroid and bounding polygon. "
+                "Covers 30 PLSS states, 37 principal meridians, and all 254 Texas counties."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "PLSS legal land description (any common format).",
+                        "description": "Legal land description (PLSS or Texas TXSS).",
                     }
                 },
                 "required": ["description"],
@@ -102,8 +103,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="coordinates_to_plss",
             description=(
-                "Find the PLSS legal land description for given GPS coordinates. "
-                "Returns the section, township, range, and principal meridian for any US location covered by PLSS."
+                "Find the legal land description for given GPS coordinates (PLSS or Texas TXSS). "
+                "Returns section/township/range/meridian for PLSS locations or the Texas abstract/block/survey match for TXSS."
             ),
             inputSchema={
                 "type": "object",
@@ -117,15 +118,15 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="plss_to_geojson",
             description=(
-                "Return the GeoJSON boundary polygon for a PLSS legal land description. "
-                "Returns a FeatureCollection with the section or quarter-section footprint."
+                "Return the GeoJSON boundary polygon for a PLSS or Texas TXSS legal land description. "
+                "Returns a FeatureCollection with the polygon or multipolygon footprint."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "PLSS legal land description.",
+                        "description": "Legal land description (PLSS or Texas TXSS).",
                     }
                 },
                 "required": ["description"],
@@ -134,8 +135,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="validate_description",
             description=(
-                "Validate and normalize a PLSS legal land description string. "
-                "Returns whether the input matches known PLSS patterns, a normalized form, and suggestions if invalid. "
+                "Validate and normalize a PLSS or Texas TXSS legal land description string. "
+                "Returns whether the input matches known patterns, a normalized form, survey_system when valid, and suggestions if invalid. "
                 "No API call is made — this runs locally."
             ),
             inputSchema={
@@ -143,7 +144,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "PLSS legal land description to validate.",
+                        "description": "Legal land description to validate.",
                     }
                 },
                 "required": ["description"],
@@ -152,7 +153,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="batch_convert",
             description=(
-                "Convert multiple PLSS legal land descriptions to GPS coordinates in one request. "
+                "Convert multiple PLSS or Texas TXSS legal land descriptions to GPS coordinates in one request. "
                 f"Accepts up to {MAX_BATCH_SIZE} descriptions per request. "
                 "Returns total, converted, failed counts and per-input records."
             ),
@@ -162,7 +163,7 @@ async def list_tools() -> list[Tool]:
                     "descriptions": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": f"Array of PLSS legal land descriptions (max {MAX_BATCH_SIZE}).",
+                        "description": f"Array of legal land descriptions (max {MAX_BATCH_SIZE}).",
                         "maxItems": MAX_BATCH_SIZE,
                     }
                 },
@@ -172,7 +173,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="autocomplete",
             description=(
-                "Get autocomplete suggestions for a partial PLSS description (e.g. user typing 'T2N R4'). "
+                "Get autocomplete suggestions for a partial PLSS or Texas TXSS description (e.g. 'T2N R4' or 'A-175'). "
                 f"Returns up to {MAX_AUTOCOMPLETE_LIMIT} candidate descriptions."
             ),
             inputSchema={
@@ -180,7 +181,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Partial PLSS description (minimum 2 characters).",
+                        "description": "Partial legal description (minimum 2 characters).",
                     },
                     "limit": {
                         "type": "integer",
@@ -248,6 +249,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 }
                 if result.normalized is not None:
                     payload["normalized"] = result.normalized
+                if result.survey_system is not None:
+                    payload["survey_system"] = result.survey_system
                 if result.suggestion is not None:
                     payload["suggestion"] = result.suggestion
                 return _ok(payload)
@@ -277,8 +280,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 result = await client.reverse(lng, lat)
                 if not result.features:
                     return _err(
-                        f"No PLSS data found for coordinates [{lat}, {lng}]. "
-                        "PLSS covers 30 US states — this location may be outside the surveyed area."
+                        f"No legal land description found for coordinates [{lat}, {lng}]. "
+                        "PLSS covers 30 US states and Texas uses TXSS — this location may be outside surveyed coverage."
                     )
                 sr = _fc_to_search_result(result)
                 return _ok(
@@ -298,7 +301,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 polygon_features = [
                     f.model_dump()
                     for f in result.features
-                    if isinstance(f.geometry, Polygon)
+                    if isinstance(f.geometry, (Polygon, MultiPolygon))
                 ]
                 if not polygon_features:
                     return _err(f'No GeoJSON found for "{description}"')
@@ -388,6 +391,7 @@ def _summarize_search(payload: dict[str, Any], original: str) -> dict[str, Any]:
         "legal_location": props.get("legal_location"),
         "state": props.get("state"),
         "county": props.get("county"),
+        "survey_system": props.get("survey_system"),
         "meridian": props.get("meridian"),
         "centroid": centroid,
         "geojson": payload,

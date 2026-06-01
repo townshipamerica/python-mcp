@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/townshipamerica-mcp)](https://pypi.org/project/townshipamerica-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Model Context Protocol (MCP) server that exposes Township America's PLSS conversion to AI agents — Claude, ChatGPT, Cursor, GitHub Copilot, Windsurf, or any MCP-compatible client.
+Model Context Protocol (MCP) server that exposes Township America's PLSS and Texas TXSS conversion tools to AI agents — Claude, ChatGPT, Cursor, GitHub Copilot, Windsurf, or any MCP-compatible client.
 
 Also includes a Python client (`TownshipMCPClient`) for scripts and notebooks, backed by the [townshipamerica](https://pypi.org/project/townshipamerica/) SDK.
 
@@ -31,15 +31,15 @@ export TOWNSHIP_AMERICA_API_KEY="ta_…"
 
 | Tool                   | Description                                           |
 | ---------------------- | ----------------------------------------------------- |
-| `plss_to_coordinates`  | Convert a PLSS legal description to GPS coordinates   |
-| `coordinates_to_plss`  | Reverse-lookup coordinates to a PLSS description      |
-| `plss_to_geojson`      | Return the section/quarter/aliquot polygon as GeoJSON |
-| `validate_description` | Validate and normalize locally (no API call)          |
+| `plss_to_coordinates`  | Convert a PLSS or Texas TXSS description to GPS       |
+| `coordinates_to_plss`  | Reverse-lookup coordinates to a legal description     |
+| `plss_to_geojson`      | Return the tract polygon/multipolygon as GeoJSON      |
+| `validate_description` | Validate and normalize locally (PLSS + TXSS, no API)  |
 | `batch_convert`        | Convert up to 100 descriptions in one request         |
-| `autocomplete`         | Suggestions for partial PLSS input (max 10)           |
+| `autocomplete`         | Suggestions for partial PLSS or TXSS input (max 10)   |
 | `land_report`          | Federal Land Report — coming Q3 2025                  |
 
-Coverage: 30 PLSS states, 37 principal meridians. Powered by BLM CadNSDI V2.
+Coverage: 30 PLSS states, 37 principal meridians, and all 254 Texas counties (TXSS). Powered by BLM CadNSDI V2 and Texas GLO survey data.
 
 ### Claude Desktop
 

@@ -136,6 +136,14 @@ async def test_call_tool_validate_description_local_no_api():
 
 
 @pytest.mark.asyncio
+async def test_call_tool_validate_description_txss_local_no_api():
+    result = await call_tool("validate_description", {"description": "A-175 Reeves County"})
+    payload = json.loads(result[0].text)
+    assert payload["valid"] is True
+    assert payload["survey_system"] == "TXSS"
+
+
+@pytest.mark.asyncio
 async def test_call_tool_coordinates_accepts_lng_and_lon(sample_feature_collection):
     @asynccontextmanager
     async def fake_make():

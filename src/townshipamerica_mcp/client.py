@@ -16,7 +16,7 @@ from townshipamerica.exceptions import (
     TownshipAmericaError,
     ValidationError as TAValidationError,
 )
-from townshipamerica.models import FeatureCollection, Point, Polygon
+from townshipamerica.models import FeatureCollection, MultiPolygon, Point, Polygon
 
 from .exceptions import (
     AuthenticationError,
@@ -56,7 +56,7 @@ def _fc_to_search_result(fc: FeatureCollection) -> SearchResult:
         lng = centroid.geometry.longitude
 
     boundary = None
-    if grid and isinstance(grid.geometry, Polygon):
+    if grid and isinstance(grid.geometry, (Polygon, MultiPolygon)):
         boundary = grid.geometry.model_dump()
 
     return SearchResult(
@@ -134,7 +134,7 @@ class TownshipMCPClient:
             polygon_features = [
                 f.model_dump()
                 for f in fc.features
-                if isinstance(f.geometry, Polygon)
+                if isinstance(f.geometry, (Polygon, MultiPolygon))
             ]
             if not polygon_features:
                 raise NotFoundError(f'No GeoJSON found for "{description}"')
