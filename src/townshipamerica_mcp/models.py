@@ -83,22 +83,3 @@ class BatchResult:
             failed=int(data["failed"]),
             records=[BatchRecord.from_dict(r) for r in data.get("records", [])],
         )
-
-
-@dataclass
-class LandReportStub:
-    """Stub response from land_report (coming Q3 2025)."""
-
-    status: str
-    description: str
-    message: str
-    preview_fields: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LandReportStub":
-        return cls(
-            status=data["status"],
-            description=data["description"],
-            message=data["message"],
-            preview_fields=data.get("preview_fields", []),
-        )

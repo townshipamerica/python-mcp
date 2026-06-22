@@ -26,7 +26,7 @@ from .exceptions import (
     ValidationError,
 )
 from .constants import MAX_BATCH_SIZE
-from .models import BatchResult, LandReportStub, SearchResult, ValidationResult
+from .models import BatchResult, SearchResult, ValidationResult
 from .plss_validation import validate_plss_description
 
 
@@ -191,31 +191,6 @@ class TownshipMCPClient:
                 "failed": len(records) - converted,
                 "records": records,
             }
-        )
-
-    def land_report(self, description: str) -> LandReportStub:
-        """Federal Land Report — coming Q3 2025."""
-        if not description or not description.strip():
-            raise ValueError("description must not be empty")
-        return LandReportStub(
-            status="coming_soon",
-            description=description.strip(),
-            message=(
-                "Federal Land Report via MCP is coming Q3 2025. "
-                "Currently available via the Township America web app at "
-                "https://app.townshipamerica.com for Pro+ subscribers. "
-                "A dedicated API-key-authenticated endpoint will be available for AI agents this quarter."
-            ),
-            preview_fields=[
-                "federal_land_status",
-                "blm_surface_ownership",
-                "blm_mineral_ownership",
-                "national_forest",
-                "national_park",
-                "tribal_lands",
-                "water_rights",
-                "patents",
-            ],
         )
 
     def close(self) -> None:

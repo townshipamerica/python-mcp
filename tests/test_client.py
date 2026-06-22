@@ -228,22 +228,6 @@ class TestBatchConvert:
         assert result.records[1].error == "Not found"
 
 
-class TestLandReport:
-    @patch("townshipamerica_mcp.client.TownshipAmerica")
-    def test_returns_stub(self, mock_ta_class: MagicMock):
-        client = TownshipMCPClient(api_key="ta_test")
-        stub = client.land_report("NW 25 24N 1E 6TH MERIDIAN")
-        assert stub.status == "coming_soon"
-        assert "Q3 2025" in stub.message
-        assert len(stub.preview_fields) > 0
-
-    @patch("townshipamerica_mcp.client.TownshipAmerica")
-    def test_empty_description_raises(self, mock_ta_class: MagicMock):
-        client = TownshipMCPClient(api_key="ta_test")
-        with pytest.raises(ValueError, match="must not be empty"):
-            client.land_report("  ")
-
-
 class TestContextManager:
     @patch("townshipamerica_mcp.client.TownshipAmerica")
     def test_close_on_exit(self, mock_ta_class: MagicMock):

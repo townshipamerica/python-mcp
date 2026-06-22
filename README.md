@@ -37,7 +37,6 @@ export TOWNSHIP_AMERICA_API_KEY="ta_…"
 | `validate_description` | Validate and normalize locally (PLSS + TXSS, no API)  |
 | `batch_convert`        | Convert up to 100 descriptions in one request         |
 | `autocomplete`         | Suggestions for partial PLSS or TXSS input (max 10)   |
-| `land_report`          | Federal Land Report — coming Q3 2025                  |
 
 Coverage: 30 PLSS states, 37 principal meridians, and all 254 Texas counties (TXSS). Powered by BLM CadNSDI V2 and Texas GLO survey data.
 

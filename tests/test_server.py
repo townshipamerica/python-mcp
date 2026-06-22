@@ -69,7 +69,7 @@ class TestSummarizeSearch:
 
 
 @pytest.mark.asyncio
-async def test_list_tools_returns_seven_tools():
+async def test_list_tools_returns_six_tools():
     tools = await list_tools()
     names = {t.name for t in tools}
     assert names == {
@@ -79,7 +79,6 @@ async def test_list_tools_returns_seven_tools():
         "validate_description",
         "batch_convert",
         "autocomplete",
-        "land_report",
     }
 
 
@@ -157,15 +156,6 @@ async def test_call_tool_coordinates_accepts_lng_and_lon(sample_feature_collecti
             )
             payload = json.loads(result[0].text)
             assert payload["legal_location"] == "NW 25 24N 1E 6TH MERIDIAN"
-
-
-@pytest.mark.asyncio
-async def test_call_tool_land_report_stub():
-    result = await call_tool(
-        "land_report", {"description": "NW 25 24N 1E 6TH MERIDIAN"}
-    )
-    payload = json.loads(result[0].text)
-    assert payload["status"] == "coming_soon"
 
 
 @pytest.mark.asyncio

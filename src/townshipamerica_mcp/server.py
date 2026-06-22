@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import sys
-from dataclasses import asdict
 from typing import Any
 
 from mcp.server import Server
@@ -29,23 +28,11 @@ from .constants import (
     MAX_BATCH_SIZE,
     QUOTA_EXCEEDED_MESSAGE,
 )
-from .models import LandReportStub
 from .plss_validation import validate_plss_description
 
 logger = logging.getLogger("townshipamerica_mcp")
 
 server: Server = Server("townshipamerica")
-
-_LAND_REPORT_PREVIEW_FIELDS = [
-    "federal_land_status",
-    "blm_surface_ownership",
-    "blm_mineral_ownership",
-    "national_forest",
-    "national_park",
-    "tribal_lands",
-    "water_rights",
-    "patents",
-]
 
 
 def _get_api_key() -> str:
@@ -192,24 +179,6 @@ async def list_tools() -> list[Tool]:
                 "required": ["query"],
             },
         ),
-        Tool(
-            name="land_report",
-            description=(
-                "Retrieve a Federal Land Report for a PLSS legal land description. "
-                "Provides federal land status, BLM ownership, mineral rights, and water rights data. "
-                "NOTE: MCP delivery of Federal Land Reports is coming Q3 2025."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "PLSS legal land description.",
-                    }
-                },
-                "required": ["description"],
-            },
-        ),
     ]
 
 
@@ -219,21 +188,6 @@ def _ok(data: Any) -> list[TextContent]:
 
 def _err(message: str) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps({"error": message}, indent=2))]
-
-
-def _land_report_stub(description: str) -> dict[str, Any]:
-    stub = LandReportStub(
-        status="coming_soon",
-        description=description.strip(),
-        message=(
-            "Federal Land Report via MCP is coming Q3 2025. "
-            "Currently available via the Township America web app at "
-            "https://app.townshipamerica.com for Pro+ subscribers. "
-            "A dedicated API-key-authenticated endpoint will be available for AI agents this quarter."
-        ),
-        preview_fields=_LAND_REPORT_PREVIEW_FIELDS,
-    )
-    return asdict(stub)
 
 
 @server.call_tool()
@@ -256,12 +210,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return _ok(payload)
             except ValueError as exc:
                 return _err(str(exc))
-
-        if name == "land_report":
-            description = arguments["description"]
-            if not isinstance(description, str) or not description.strip():
-                return _err("'description' must be a non-empty string.")
-            return _ok(_land_report_stub(description))
 
         async with _make_client() as client:
             if name == "plss_to_coordinates":

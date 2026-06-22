@@ -5,7 +5,6 @@ from __future__ import annotations
 from townshipamerica_mcp.models import (
     BatchRecord,
     BatchResult,
-    LandReportStub,
     SearchResult,
     ValidationResult,
 )
@@ -88,16 +87,3 @@ def test_batch_result_from_dict():
     assert result.converted == 1
     assert result.failed == 1
     assert len(result.records) == 2
-
-
-def test_land_report_stub_from_dict():
-    stub = LandReportStub.from_dict(
-        {
-            "status": "coming_soon",
-            "description": "NW 25 24N 1E 6TH MERIDIAN",
-            "message": "Coming soon",
-            "preview_fields": ["patents"],
-        }
-    )
-    assert stub.status == "coming_soon"
-    assert stub.preview_fields == ["patents"]
